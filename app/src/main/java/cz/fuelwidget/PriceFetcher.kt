@@ -1,6 +1,5 @@
 package cz.fuelwidget
 
-import android.text.Html
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -23,7 +22,9 @@ object PriceFetcher {
     private val OPTS = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     private val CELL = Regex("""<t[dh]\b[^>]*>(.*?)</t[dh]>""", OPTS)
     private val TAG = Regex("""<[^>]+>""")
-    private val GIF = Regex("""images/([A-Za-z0-9_]+)\.gif""", RegexOption.IGNORE_CASE)
+    private val ROW = Regex("""<tr\b[^>]*>(.*?)(?=<tr\b|</table>|$)""", OPTS)
+    private val N95_ICON = Regex("""[/"']n95_c\.gif""", RegexOption.IGNORE_CASE)
+    private val DIESEL_ICON = Regex("""[/"']d_c\.gif""", RegexOption.IGNORE_CASE)
     private val PRICE_LIKE = Regex("""^(\d+(?:[.,]\d+)?|-{2,}|\*)$""")
     private val NUMBER = Regex("""^\d+(?:[.,]\d+)?$""")
     private val VALID_FROM = Regex("""platnost\s+od:?\s*(\d{1,2}\.\s*\d{1,2}\.\s*\d{4})""", RegexOption.IGNORE_CASE)
@@ -63,37 +64,42 @@ object PriceFetcher {
     fun parse(html: String): PriceList {
         val validFrom = VALID_FROM.find(html)?.groupValues?.get(1)?.replace(" ", "")
 
-        // Only the CZK table: from the first ONO logo up to where the EUR table begins.
-        val start = html.indexOf("ono_logo_cenik").let { if (it < 0) 0 else it }
-        val end = html.indexOf("(EUR)", start).let { if (it < 0) html.length else it }
+        // Only the CZK table: from the table row holding the ONO logo up to where the EUR table begins.
+        val logo = html.indexOf("ono_logo_cenik")
+        if (logo < 0) return PriceList(validFrom, emptyList())
+        val start = html.lastIndexOf("<tr", logo, ignoreCase = true).let { if (it < 0) logo else it }
+        val end = html.indexOf("(EUR)", logo).let { if (it < 0) html.length else it }
         val section = html.substring(start, end)
 
-        val cells = CELL.findAll(section).map { it.range.first to clean(it.groupValues[1]) }.toList()
+        // Rows of cells: raw HTML (to spot the fuel icons) and clean text (for names and prices).
+        class Cell(val raw: String, val text: String)
+        val rows = ROW.findAll(section).map { row ->
+            CELL.findAll(row.groupValues[1]).map { Cell(it.groupValues[1], clean(it.groupValues[1])) }.toList()
+        }.filter { it.isNotEmpty() }.toList()
 
-        fun isStation(i: Int): Boolean {
-            val t = cells[i].second
-            if (t.isEmpty() || PRICE_LIKE.matches(t) || t.contains("(CZK)")) return false
-            val next = cells.getOrNull(i + 1)?.second ?: return false
-            return PRICE_LIKE.matches(next)
+        // Header row: the row with the fuel icons. A column's position = the icon cell's index in that row.
+        // The station name sits in column 0 in both the header (logo) and the data rows.
+        var n95Col = -1
+        var dieselCol = -1
+        for (row in rows) {
+            val n = row.indexOfFirst { N95_ICON.containsMatchIn(it.raw) }
+            val d = row.indexOfFirst { DIESEL_ICON.containsMatchIn(it.raw) }
+            if (n >= 0 && d >= 0) {
+                val logoCell = row.indexOfFirst { it.raw.contains("ono_logo_cenik") }.coerceAtLeast(0)
+                n95Col = n - logoCell
+                dieselCol = d - logoCell
+                break
+            }
         }
-
-        val firstStation = cells.indices.firstOrNull { isStation(it) }
-            ?: return PriceList(validFrom, emptyList())
-
-        // Column order comes from the fuel icons in the header (n95_c.gif, d_c.gif, ...).
-        val header = section.substring(0, cells[firstStation].first)
-        val icons = GIF.findAll(header).map { it.groupValues[1].lowercase() }
-            .filter { it != "ono_logo_cenik" }.toList()
-        val n95Offset = icons.indexOf("n95_c").let { if (it < 0) 1 else it + 1 }
-        val dieselOffset = icons.indexOf("d_c").let { if (it < 0) 4 else it + 1 }
+        if (n95Col <= 0 || dieselCol <= 0) return PriceList(validFrom, emptyList())
 
         val seen = HashSet<String>()
         val stations = ArrayList<Station>()
-        for (i in firstStation until cells.size) {
-            if (!isStation(i)) continue
-            val name = cells[i].second
-            val n95 = cells.getOrNull(i + n95Offset)?.second?.takeIf { NUMBER.matches(it) }
-            val diesel = cells.getOrNull(i + dieselOffset)?.second?.takeIf { NUMBER.matches(it) }
+        for (row in rows) {
+            val name = row[0].text
+            if (name.isEmpty() || PRICE_LIKE.matches(name) || row.size <= maxOf(n95Col, dieselCol)) continue
+            val n95 = row[n95Col].text.takeIf { NUMBER.matches(it) }
+            val diesel = row[dieselCol].text.takeIf { NUMBER.matches(it) }
             if (n95 == null && diesel == null) continue
             if (seen.add(name)) stations += Station(name, n95, diesel)
         }
@@ -102,8 +108,27 @@ object PriceFetcher {
 
     private fun clean(cellHtml: String): String {
         var t = TAG.replace(cellHtml, " ")
-        if (t.contains('&')) t = Html.fromHtml(t, Html.FROM_HTML_MODE_LEGACY).toString()
-        return t.replace(' ', ' ').replace('￼', ' ')
-            .replace(Regex("""\s+"""), " ").trim()
+        if (t.contains('&')) t = decodeEntities(t)
+        return t.replace(' ', ' ').replace(Regex("""\s+"""), " ").trim()
+    }
+
+    // Plain Kotlin (no Android classes), so the parser can also be tested on the build server.
+    private val ENTITY = Regex("""&(#x[0-9a-fA-F]+|#\d+|[A-Za-z]+);""")
+    private val NAMED = mapOf(
+        "nbsp" to " ", "amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'", "ndash" to "–",
+        "aacute" to "á", "Aacute" to "Á", "eacute" to "é", "Eacute" to "É", "iacute" to "í", "Iacute" to "Í",
+        "oacute" to "ó", "Oacute" to "Ó", "uacute" to "ú", "Uacute" to "Ú", "yacute" to "ý", "Yacute" to "Ý",
+        "ccaron" to "č", "Ccaron" to "Č", "dcaron" to "ď", "Dcaron" to "Ď", "ecaron" to "ě", "Ecaron" to "Ě",
+        "ncaron" to "ň", "Ncaron" to "Ň", "rcaron" to "ř", "Rcaron" to "Ř", "scaron" to "š", "Scaron" to "Š",
+        "tcaron" to "ť", "Tcaron" to "Ť", "zcaron" to "ž", "Zcaron" to "Ž", "uring" to "ů", "Uring" to "Ů",
+    )
+
+    private fun decodeEntities(s: String): String = ENTITY.replace(s) { m ->
+        val e = m.groupValues[1]
+        when {
+            e.startsWith("#x") -> e.drop(2).toIntOrNull(16)?.let { String(Character.toChars(it)) }
+            e.startsWith("#") -> e.drop(1).toIntOrNull()?.let { String(Character.toChars(it)) }
+            else -> NAMED[e]
+        } ?: m.value
     }
 }

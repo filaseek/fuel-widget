@@ -1,4 +1,5 @@
-# Builds the APK on every push and publishes it on the repo's Releases page.
+# On every push: checks the parser against the live Tank ONO price list, builds the APK,
+# and publishes it on the repo's Releases page. A failed check publishes no APK.
 name: Build APK
 
 on:
@@ -20,17 +21,57 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Build
+      - name: Check prices are read correctly (live page)
+        id: check
         run: |
           chmod +x gradlew
+          if ./gradlew testReleaseUnitTest --no-daemon; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+          touch parse-report.txt
+
+      - name: Build
+        if: steps.check.outputs.ok == 'true'
+        run: |
           ./gradlew assembleRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk fuel-widget.apk
+          { echo "Download **fuel-widget.apk** below on your phone and open it to install."; echo; echo '```'; cat parse-report.txt; echo '```'; } > notes.md
 
       - name: Publish release
+        if: steps.check.outputs.ok == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Fuel Widget (build ${{ github.run_number }})
-          body: Download **fuel-widget.apk** below on your phone and open it to install.
+          body_path: notes.md
           files: fuel-widget.apk
           make_latest: true
+
+      # If the check failed: publish the details (no APK) so the problem can be diagnosed.
+      - name: Collect failure details
+        if: steps.check.outputs.ok != 'true'
+        run: |
+          curl -sSL -A "Mozilla/5.0" "https://www.tank-ono.cz/cz/index.php?page=cenik" -o cenik.html || true
+          {
+            echo "Price check failed. This build has no APK; install the previous one."
+            echo; echo '```'; cat parse-report.txt; echo '```'
+            echo; echo "Header of the price table:"; echo '```html'
+            python3 - <<'PY'
+          d = open("cenik.html", "rb").read().decode("utf-8", "replace")
+          i = d.find("ono_logo_cenik"); j = d.rfind("<tr", 0, i)
+          print(d[j:j+5000].replace("```", "'''"))
+          PY
+            echo '```'
+          } > notes.md
+
+      - name: Publish failure details
+        if: steps.check.outputs.ok != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: check-failed-${{ github.run_number }}
+          name: Check failed (build ${{ github.run_number }}), nothing to install
+          body_path: notes.md
+          prerelease: true
+          make_latest: false
+
+      - name: Fail the run
+        if: steps.check.outputs.ok != 'true'
+        run: exit 1
