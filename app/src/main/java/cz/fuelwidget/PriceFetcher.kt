@@ -22,7 +22,8 @@ object PriceFetcher {
     private val OPTS = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     private val CELL = Regex("""<t[dh]\b[^>]*>(.*?)</t[dh]>""", OPTS)
     private val TAG = Regex("""<[^>]+>""")
-    private val ROW = Regex("""<tr\b[^>]*>(.*?)(?=<tr\b|</table>|$)""", OPTS)
+    private val COMMENT = Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL)
+    private val ROW =Regex("""<tr\b[^>]*>(.*?)(?=<tr\b|</table>|$)""", OPTS)
     private val N95_ICON = Regex("""[/"']n95_c\.gif""", RegexOption.IGNORE_CASE)
     private val DIESEL_ICON = Regex("""[/"']d_c\.gif""", RegexOption.IGNORE_CASE)
     private val PRICE_LIKE = Regex("""^(\d+(?:[.,]\d+)?|-{2,}|\*)$""")
@@ -61,7 +62,9 @@ object PriceFetcher {
         return Charsets.UTF_8
     }
 
-    fun parse(html: String): PriceList {
+    fun parse(page: String): PriceList {
+        // The page has commented-out columns (N91, E85) that browsers hide; drop them first.
+        val html = COMMENT.replace(page, "")
         val validFrom = VALID_FROM.find(html)?.groupValues?.get(1)?.replace(" ", "")
 
         // Only the CZK table: from the table row holding the ONO logo up to where the EUR table begins.
