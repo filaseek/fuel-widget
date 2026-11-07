@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Refreshes every 3 hours (Tank ONO changes prices at most about once a day); tap the widget to refresh now. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="cz.fuelwidget.ConfigActivity"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/widget_fuel"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="90dp"
+    android:previewLayout="@layout/widget_fuel"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="10800000"
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable" />
