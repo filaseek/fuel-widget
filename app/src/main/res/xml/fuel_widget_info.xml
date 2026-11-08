@@ -6,7 +6,7 @@
     android:initialLayout="@layout/widget_fuel"
     android:minWidth="250dp"
     android:minHeight="40dp"
-    android:minResizeWidth="180dp"
+    android:minResizeWidth="250dp"
     android:minResizeHeight="40dp"
     android:previewLayout="@layout/widget_fuel"
     android:resizeMode="horizontal|vertical"
