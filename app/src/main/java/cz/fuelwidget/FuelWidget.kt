@@ -6,9 +6,6 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class FuelWidget : AppWidgetProvider() {
 
@@ -49,21 +46,13 @@ class FuelWidget : AppWidgetProvider() {
             val name = Prefs.station(ctx, widgetId)
             val st = name?.let { Prefs.cachedStation(ctx, it) }
 
-            views.setTextViewText(R.id.station, st?.displayName ?: name?.removePrefix("ČS")?.trim() ?: "Tank ONO")
             views.setTextViewText(R.id.priceN95, st?.n95 ?: "–")
             views.setTextViewText(R.id.priceDiesel, st?.diesel ?: "–")
 
-            val time = Prefs.cacheTime(ctx).takeIf { it > 0 }
-                ?.let { SimpleDateFormat("d.M. HH:mm", Locale.getDefault()).format(Date(it)) }
-            val valid = Prefs.cachedValidFrom(ctx)?.let { "ceník od ${it.substringBeforeLast('.')}." } // 14.10.2026 -> ceník od 14.10.
-            views.setTextViewText(
-                R.id.status,
-                when (status) {
-                    Status.LOADING -> "Updating…"
-                    Status.OFFLINE -> if (time != null) "Offline · $time" else "No connection · tap to retry"
-                    Status.OK -> listOfNotNull(valid, time).joinToString(" · ")
-                }
-            )
+            // No status line in the slim widget: prices dim while updating or when offline (showing last known).
+            val color = if (status == Status.OK) 0xFFFFFFFF.toInt() else 0x80FFFFFF.toInt()
+            views.setTextColor(R.id.priceN95, color)
+            views.setTextColor(R.id.priceDiesel, color)
 
             val tap = Intent(ctx, FuelWidget::class.java)
                 .setAction(ACTION_REFRESH)
